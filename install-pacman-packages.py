@@ -666,18 +666,19 @@ def main(argv):
             cached_packages.append(CachedPackage(full_path))
 
     pkg_dict = dict()
+    package_names = [x.lower() for x in args.package_names]
 
     # collect information about the package and their dependencies
-    for pkg_name in args.package_names:
+    for pkg_name in package_names:
         get_package_recursive(pkg_name, pkg_dict)
 
     # install the package and their dependencies
-    for pkg_name in args.package_names:
+    for pkg_name in package_names:
         install_package_recursive(pkg_name, pkg_dict, args.use_cache_only, args.force)
 
     # print installation statistics
     printInfo("\nInstallation Statistics:")
-    for pkg_name in args.package_names:
+    for pkg_name in package_names:
         print_installation_log(pkg_name, pkg_dict)
 
 
