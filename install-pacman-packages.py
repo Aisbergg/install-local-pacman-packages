@@ -10,10 +10,10 @@ from distutils.version import LooseVersion
 
 import pacman
 
-
 pacman_cache_dir = '/var/cache/pacman/pkg'
 packages_in_offical_repositories = None
 cached_packages = None
+
 
 class ConsoleColors:
     blue = '\033[94m'
@@ -24,7 +24,7 @@ class ConsoleColors:
 
 
 class InvalidPacmanPackageError(Exception):
-    """ Invalid pacman package exception
+    """Invalid pacman package exception.
 
     Args:
         message (str): Message passed with the exception
@@ -48,7 +48,7 @@ class CachedPackageUnavailable(Exception):
 
 
 def printInfo(message):
-    """ Prints a colorful info message
+    """Print a colorful info message.
 
     Args:
         message (str): Message to be printed
@@ -58,7 +58,7 @@ def printInfo(message):
 
 
 def printSuccessfull(message):
-    """ Prints a colorful successfull message
+    """Print a colorful successfull message.
 
     Args:
         message (str): Message to be printed
@@ -68,7 +68,7 @@ def printSuccessfull(message):
 
 
 def printWarning(message):
-    """ Prints a colorful warning message
+    """Print a colorful warning message.
 
     Args:
         message (str): Message to be printed
@@ -78,7 +78,7 @@ def printWarning(message):
 
 
 def printError(message):
-    """ Prints a colorful error message
+    """Print a colorful error message.
 
     Args:
         message (str): Message to be printed
@@ -88,17 +88,15 @@ def printError(message):
 
 
 class PackageRepository:
-    """ Represents a simple enum of repositories
+    """Represents a simple enum of repositories."""
 
-    """
     OFFICIAL = "official"
     LOCAL = "local"
 
 
 class PackageBase:
-    """ Base class for pacman packages
+    """Base class for pacman packages."""
 
-    """
     name = None
     version = None
     architecture = None
@@ -123,6 +121,12 @@ class PackageBase:
         pass
 
     def install(self, force):
+        """Install the Pacman package.
+
+        Args:
+            force (bool): Force the installation of the package
+
+        """
         raise NotImplementedError("Please Implement this method")
 
     def get_installation_status(self):
@@ -138,12 +142,13 @@ class PackageBase:
 
 
 class CachedPackage(PackageBase):
-    """ Represents a cached Pacman package
+    """Represents a cached Pacman package.
 
     Args:
         path (str): Path of the cache file
 
     """
+
     path = None
 
     def __init__(self, path):
@@ -154,9 +159,7 @@ class CachedPackage(PackageBase):
             self.error_info = e
 
     def _parse_file_name(self):
-        """ Parses the file name to determine name, version and architecture of the cached package
-
-        """
+        """Parse the file name to determine name, version and architecture of the cached package."""
         file_name = os.path.basename(self.path)
         match = re.compile(r'(.+?)-([^-]+-[^-]+)-([^-]+).pkg.tar.xz').search(file_name)
         if match:
@@ -167,9 +170,7 @@ class CachedPackage(PackageBase):
             raise InvalidPacmanPackageError("Failed to parse package file name '{0}'".format(self.path))
 
     def determine_repository(self):
-        """ Determines the repository from which the package was obtained
-
-        """
+        """Determine the repository from which the package was obtained."""
         # check if package is in official repo
         for pcm_info in packages_in_offical_repositories:
             if pcm_info['id'] == self.name:
@@ -179,7 +180,7 @@ class CachedPackage(PackageBase):
         self.repository = PackageRepository.LOCAL
 
     def _parse_from_string(self, name, string):
-        """ Parses a value for a param from a string
+        """Parse a value for a param from a string.
 
         Args:
             name (str): Name of the param to parse
@@ -206,7 +207,7 @@ class CachedPackage(PackageBase):
             return values
 
     def _get_dependencies_from_alias(self, dep_alias_names):
-        """ Get the real package names if only an alias was supplied
+        """Get the real package names if only an alias was supplied.
 
         Args:
             dep_alias_names (list): (Alias-)Names of the packages
@@ -229,9 +230,7 @@ class CachedPackage(PackageBase):
         return dependencies
 
     def determine_package_info(self):
-        """ Parses package information from compressed tar file
-
-        """
+        """Parse package information from compressed tar file."""
         if self.repository == PackageRepository.LOCAL:
             try:
                 tar = tarfile.open(self.path, mode='r:xz')
@@ -264,7 +263,10 @@ class CachedPackage(PackageBase):
                     "Failed to parse package file name '{0}'".format(self.path))
 
     def install(self, force):
-        """ Install the package
+        """Install the Pacman package.
+
+        Args:
+            force (bool): Force the installation of the package
 
         """
         if self.installation_status == 0 or self.installation_status == 2 or force:
@@ -289,8 +291,9 @@ class CachedPackage(PackageBase):
                 else:
                     self.installation_status = 3
 
+
 class OfficialPackage(PackageBase):
-    """ Represents a Pacman package that is not cached locally
+    """Represents a Pacman package that is not cached locally.
 
     Args:
         name (str): Name of the Pacman package
@@ -303,6 +306,12 @@ class OfficialPackage(PackageBase):
         self.get_installation_status()
 
     def install(self, force):
+        """Install the Pacman package.
+
+        Args:
+            force (bool): Force the installation of the package
+
+        """
         pcm_cmd = ['pacman', '-S', '--needed', '--noconfirm', '--noprogressbar',
                    '--cachedir', pacman_cache_dir]
         if self.installation_status == 1:
@@ -354,7 +363,7 @@ def get_cached_package(pkg_name):
 
 
 def get_package_recursive(pkg_name, pkg_dict):
-    """ Colects information about a package and all their dependencies
+    """Colect information about a package and all their dependencies.
 
     Args:
         pkg_name (str): Name of the package
@@ -438,12 +447,13 @@ def install_package_recursive(pkg_name,
                               pkg_dict,
                               use_cache_only,
                               force):
-    """ Install a package and all their dependencies
+    """Install a package and all their dependencies.
 
     Args:
         pkg_name (str): Name of the package
         pkg_dict (dict): Store for package information
         use_cache_only (bool): Install packages only from local cache
+        force (bool): Force the installation
 
     """
     pkg = pkg_dict[pkg_name]
@@ -472,7 +482,7 @@ def install_package_recursive(pkg_name,
 
 
 def format_log(pkg, msg, prefix=''):
-    """ Formats a installation log for a given packge
+    """Format a installation log for a given packge.
 
     Args:
         pkg (PackageBase): The package
@@ -496,6 +506,16 @@ def format_log(pkg, msg, prefix=''):
 
 
 def run_command(command, print_output=True):
+    """Run a command in a subprocess.
+
+    Args:
+        command (string): Command to run
+        print_output (bool): True if the output should be printed to stdout and stderr
+
+    Returns:
+        (int, list, list).  Return code of the subprocess, sdtout and stderr
+
+    """
     process = Popen(command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
     if print_output:
         err = []
@@ -530,12 +550,13 @@ def run_command(command, print_output=True):
 
 
 def print_installation_log_recursive(pkg_names, pkg_dict, prefix='', is_root=False):
-    """ Recursivly prints a installation log for a given package
+    """Recursivly prints a installation log for a given package.
 
     Args:
         pkg_names (PackageBase): The package
         pkg_dict (dict): Store for package information
         prefix (str): Prefix for the message
+        is_root (bool): True if first recursion
 
     Returns:
         (bool, list).  Tuple consting of the installation status and the log messages as a list
@@ -583,7 +604,7 @@ def print_installation_log_recursive(pkg_names, pkg_dict, prefix='', is_root=Fal
 
 
 def print_installation_log(pkg_name, pkg_dict):
-    """ Recursivly prints a installation log for a given package
+    """Print a installation log for a given package.
 
     Args:
         pkg_names (PackageBase): The package
@@ -606,7 +627,7 @@ def enumerate_package_names(sequence):
 
 
 def main(argv):
-    """ Main logic
+    """Run the main logic.
 
     Args:
         argv (list): Command line arguments
