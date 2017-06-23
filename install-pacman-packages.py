@@ -392,7 +392,7 @@ def get_package_recursive(pkg_name, pkg_dict):
                 else:
                     pkg = PackageBase(pkg_name)
                     pkg.error_info = CachedPackageUnavailable(
-                        "No cached package available for '{0}'".format(self.path))
+                        "No cached package available for '{0}'".format(pkg_name))
                     pkg_dict[pkg_name] = pkg
                     return
 
