@@ -13,7 +13,7 @@ import pacman
 
 pacman_cache_dir = '/var/cache/pacman/pkg'
 packages_in_offical_repositories = None
-
+cached_packages = None
 
 class ConsoleColors:
     blue = '\033[94m'
@@ -35,8 +35,8 @@ class InvalidPacmanPackageError(Exception):
         super().__init__(message)
 
 
-class NoSuchPackageError(Exception):
-    """ No such package exception
+class CachedPackageUnavailable(Exception):
+    """Package not available exception.
 
     Args:
         message (str): Message passed with the exception
@@ -110,17 +110,31 @@ class PackageBase:
     error_info = None
 
     # status of the installtion
-    #   0: not yet processed
-    #   1: successfully installed
-    #   2: failed to install
-    #   3: dependency failed to install
+    #   -2: dependency failed to install
+    #   -1: failed to install
+    #   0: is not installed
+    #   1: is installed
+    #   2: different version is installed
+    #   3: successfully installed
+    #   4: successfully reinstalled
     installation_status = 0
 
     def __init__(self):
         pass
 
-    def install(self):
+    def install(self, force):
         raise NotImplementedError("Please Implement this method")
+
+    def get_installation_status(self):
+        """Get the installation status of the package."""
+        if pacman.is_installed(self.name):
+            pcm_info = pacman.get_info(self.name)
+            if pcm_info['Version'] == self.version:
+                self.installation_status = 1
+            else:
+                self.installation_status = 2
+        else:
+            self.installation_status = 0
 
 
 class CachedPackage(PackageBase):
@@ -206,9 +220,9 @@ class CachedPackage(PackageBase):
             for dep_alias_name in dep_alias_names:
                 dep_alias_name = re.sub(r'(.+?)(<|<=|>|>=){1}.*?$', r'\1',
                                         dep_alias_name)
-                rc, out, err = run_command(['package-query', '-QSiif', '%n', dep_alias_name], False)
+                rc, out, err = run_command(['package-query', '-QASiif', '%n', dep_alias_name], False)
                 if rc != 0:
-                    dependencies.append(out.splitlines()[-1])
+                    dependencies.append(out[-1])
                 else:
                     dependencies.append(dep_alias_name)
 
@@ -218,10 +232,7 @@ class CachedPackage(PackageBase):
         """ Parses package information from compressed tar file
 
         """
-        if self.repository == PackageRepository.OFFICIAL:
-            # infos on official packages not needed
-            pass
-        else:
+        if self.repository == PackageRepository.LOCAL:
             try:
                 tar = tarfile.open(self.path, mode='r:xz')
                 pkginfo = None
@@ -252,21 +263,31 @@ class CachedPackage(PackageBase):
                 self.error_info = InvalidPacmanPackageError(
                     "Failed to parse package file name '{0}'".format(self.path))
 
-    def install(self):
+    def install(self, force):
         """ Install the package
 
         """
-        printInfo("Installing package {0} {1}...".format(
-            self.name, self.version))
+        if self.installation_status == 0 or self.installation_status == 2 or force:
+            pcm_cmd = ['pacman', '-U', '--noconfirm', '--noprogressbar',
+                       '--cachedir', pacman_cache_dir]
+            if self.installation_status == 1:
+                pcm_cmd += ['--force']
+                printInfo("Renstalling package {0} {1}...".format(
+                    self.name, self.version))
+            else:
+                printInfo("Installing package {0} {1}...".format(
+                    self.name, self.version))
 
-        rc, out, err = run_command(['pacman', '-U', '--force', '--noconfirm', '--noprogressbar', '--cachedir',
-                                   pacman_cache_dir, self.path])
-        if rc != 0:
-            self.installation_status = 2
-            self.error_info = Exception(
-                "Failed to install package {0} {1}: {2}".format(self.name, self.version, err))
-        self.installation_status = 1
-
+            rc, out, err = run_command(pcm_cmd + [self.path])
+            if rc != 0:
+                self.installation_status = -1
+                self.error_info = Exception(
+                    "Failed to install package {0} {1}: {2}".format(self.name, self.version, '\n'.join(err)))
+            else:
+                if self.installation_status == 1:
+                    self.installation_status = 4
+                else:
+                    self.installation_status = 3
 
 class OfficialPackage(PackageBase):
     """ Represents a Pacman package that is not cached locally
@@ -279,50 +300,42 @@ class OfficialPackage(PackageBase):
     def __init__(self, name):
         self.name = name
         self.repository = PackageRepository.OFFICIAL
-        if not self._is_official_package():
-            self.error_info = Exception("Unoutofficial package '{0}' not found in cache".format(name))
+        self.get_installation_status()
 
-    def _is_official_package(self):
-        # check if package is in official repo
-        for pcm_info in packages_in_offical_repositories:
-            if pcm_info['id'] == self.name:
-                return True
+    def install(self, force):
+        pcm_cmd = ['pacman', '-S', '--needed', '--noconfirm', '--noprogressbar',
+                   '--cachedir', pacman_cache_dir]
+        if self.installation_status == 1:
+            pcm_cmd += ['--force']
+            printInfo("Renstalling package {0} {1}...".format(
+                self.name, self.version))
+        else:
+            printInfo("Installing package {0} {1}...".format(
+                self.name, self.version))
 
-        return False
-
-    def install(self):
-        printInfo("Installing package {0} {1}...".format(
-            self.name, self.version))
-        p = Popen(['pacman', '-S', '--needed', '--noconfirm', '--noprogressbar', '--cachedir',
-                  pacman_cache_dir, self.name],
-                  stdout=PIPE,
-                  stderr=PIPE,
-                  universal_newlines=True)
-        out, err = p.communicate()
-        if p.returncode != 0:
-            self.installation_status = 2
+        rc, out, err = run_command(pcm_cmd + [self.name])
+        if rc != 0:
+            self.installation_status = -1
             self.error_info = Exception(
-                "Failed to install package {0}: {1}".format(self.name, err))
-        self.installation_status = 1
+                "Failed to install package {0}: {1}".format(self.name, '\n'.join(err)))
+        else:
+            if self.installation_status == 1:
+                self.installation_status = 4
+            else:
+                self.installation_status = 3
 
 
-def get_package_recursive(pkg_name,
-                          pkg_dict,
-                          cached_packages):
-    """ Colects information about a package and all their dependencies
+def get_cached_package(pkg_name):
+    """Get a cached version of a package.
 
     Args:
         pkg_name (str): Name of the package
-        pkg_dict (dict): Store for package information
-        cached_packages (list): List of all cached package
+
+    Returns:
+        CachedPackage: The cached package for the given name. If the given
+                       package is not in cache None is returned.
 
     """
-
-    # check if package is already in pkg_dict
-    if pkg_name in pkg_dict:
-        return
-
-    # check if package is in cache
     pkg = None
     chached_versions = []
     for cached_pkg in cached_packages:
@@ -334,20 +347,80 @@ def get_package_recursive(pkg_name,
         for cached_pkg in chached_versions:
             if LooseVersion(pkg.version) < LooseVersion(cached_pkg.version):
                 pkg = cached_pkg
+        if pkg:
+            pkg.get_installation_status()
 
-    # check if package is in official repository
-    if not pkg:
-        pkg = OfficialPackage(pkg_name)
+    return pkg
 
-    pkg_dict[pkg_name] = pkg
 
-    # break if package is invalid
-    if pkg.error_info:
+def get_package_recursive(pkg_name, pkg_dict):
+    """ Colects information about a package and all their dependencies
+
+    Args:
+        pkg_name (str): Name of the package
+        pkg_dict (dict): Store for package information
+
+    """
+    if pkg_name in pkg_dict:
         return
 
-    # break if package is an official one
-    if pkg.repository == PackageRepository.OFFICIAL:
-        return
+    # check if package is in cache
+    pkg = get_cached_package(pkg_name)
+    if pkg:
+        pkg_dict[pkg_name] = pkg
+    else:
+        # check if the package is already installed
+        rc, out, err = run_command(['package-query', '-Qiif', '%n', pkg_name], False)
+        real_pkg_name = ""
+        if rc == 0:
+            real_pkg_name = out[0]
+            pkg = get_cached_package(real_pkg_name)
+            if pkg:
+                pkg_dict[pkg_name] = pkg
+                pkg_dict[real_pkg_name] = pkg
+            else:
+                # check if the package is in a offical repository
+                rc, out, err = run_command(['package-query', '-Siif', '%n', pkg_name], False)
+                if rc == 0:
+                    real_pkg_name = out[-1]
+                    pkg = OfficialPackage(real_pkg_name)
+                    pkg_dict[pkg_name] = pkg
+                    pkg_dict[real_pkg_name] = pkg
+                    return
+
+                # package is not in an offical repository and not locally available
+                else:
+                    pkg = PackageBase(pkg_name)
+                    pkg.error_info = CachedPackageUnavailable(
+                        "No cached package available for '{0}'".format(self.path))
+                    pkg_dict[pkg_name] = pkg
+                    return
+
+        else:
+            # check if the package is in official repo
+            rc, out, err = run_command(['package-query', '-Siif', '%n', pkg_name], False)
+            if rc == 0:
+                real_pkg_name = out[-1]
+                pkg = OfficialPackage(real_pkg_name)
+                pkg_dict[pkg_name] = pkg
+                pkg_dict[real_pkg_name] = pkg
+                return
+
+            else:
+                rc, out, err = run_command(['package-query', '-Aiif', '%n', pkg_name], False)
+                if rc == 0:
+                    for rpn in out:
+                        pkg = get_cached_package(rpn)
+                        if pkg:
+                            break
+
+                # package is not locally cached
+                if not pkg:
+                    pkg = PackageBase(pkg_name)
+                    pkg.error_info = CachedPackageUnavailable(
+                        "No cached package available for '{0}'".format(pkg_name))
+                    pkg_dict[pkg_name] = pkg
+                    return
 
     pkg.determine_repository()
     pkg.determine_package_info()
@@ -356,15 +429,15 @@ def get_package_recursive(pkg_name,
     if pkg.error_info:
         return
 
-    for dependency in pkg.dependencies:
-        get_package_recursive(dependency,
-                              pkg_dict,
-                              cached_packages)
+    if pkg.repository == PackageRepository.LOCAL:
+        for dependency in pkg.dependencies:
+            get_package_recursive(dependency, pkg_dict)
 
 
 def install_package_recursive(pkg_name,
                               pkg_dict,
-                              use_cache_only):
+                              use_cache_only,
+                              force):
     """ Install a package and all their dependencies
 
     Args:
@@ -373,7 +446,6 @@ def install_package_recursive(pkg_name,
         use_cache_only (bool): Install packages only from local cache
 
     """
-
     pkg = pkg_dict[pkg_name]
 
     # break if a error occurred
@@ -385,24 +457,18 @@ def install_package_recursive(pkg_name,
         if use_cache_only:
             pkg.error_info = Exception("Official package '{}' not found in cache".format(pkg_name))
         else:
-            pkg.install()
+            pkg.install(force)
         return
 
-    print(pkg.name)
-    print(pkg.version)
-    print(pkg.dependencies)
     # install dependencies first
     for dependency in pkg.dependencies:
         pkg_dependency = pkg_dict[dependency]
-        install_package_recursive(dependency, pkg_dict, use_cache_only)
+        install_package_recursive(dependency, pkg_dict, use_cache_only, force)
         if pkg_dependency.error_info:
-            pkg.installation_status = 3
+            pkg.installation_status = -2
             return
 
-    if pkg.installation_status == 0:
-        pkg.install()
-
-    return
+    pkg.install(force)
 
 
 def format_log(pkg, msg, prefix=''):
@@ -417,10 +483,11 @@ def format_log(pkg, msg, prefix=''):
         str.  The formatted installation log
 
     """
+    prefix2 = ' ' * (len(pkg.name) + len(pkg.version) + 3)
     msg_lines = msg.splitlines()
     if len(msg_lines) > 1:
         for i in range(1, len(msg_lines)):
-            msg_lines[i] = prefix + '    ' + msg_lines[i]
+            msg_lines[i] = prefix + prefix2 + msg_lines[i]
         msg = '\n'.join(msg_lines)
 
     if pkg.version:
@@ -445,21 +512,24 @@ def run_command(command, print_output=True):
             time.sleep(.05)
 
         for line in process.stdout.readlines():
-            print(line)
+            tmp = line.rstrip('\n ')
+            out.append(tmp)
+            print(tmp)
         rc = process.poll()
         if rc != 0:
             for line in process.stderr.readlines():
-                printError(line.rstrip('\n'))
-                err.append(line.rstrip('\n'))
+                tmp = line.rstrip('\n ')
+                printError(tmp)
+                err.append(tmp)
+        return (rc, out, err)
 
-        return (rc, '\n'.join(out), '\n'.join(err))
     else:
         out, err = process.communicate()
         rc = process.returncode
-        return (rc, out, err)
+        return (rc, out.splitlines(), err.splitlines())
 
 
-def print_installation_log_recursive(pkg_names, pkg_dict, prefix=''):
+def print_installation_log_recursive(pkg_names, pkg_dict, prefix='', is_root=False):
     """ Recursivly prints a installation log for a given package
 
     Args:
@@ -471,41 +541,45 @@ def print_installation_log_recursive(pkg_names, pkg_dict, prefix=''):
         (bool, list).  Tuple consting of the installation status and the log messages as a list
 
     """
-    successfully_installed = True
+    success = True
     log = []
     log_prefix = prefix + '├── '
     intermediate_prefix = prefix + '|   '
     for pos, anchor, pkg_name in enumerate_package_names(pkg_names):
         pkg = pkg_dict[pkg_name]
-        if anchor == 1:
+        log_dep = []
+        if is_root:
+            log_prefix = ""
+            intermediate_prefix = ""
+        elif anchor == 1:
             log_prefix = prefix + '└── '
             intermediate_prefix = prefix + '    '
-        if pkg.error_info:
-            successfully_installed = False
-            log.append(log_prefix + format_log(
-                pkg, "Failed: " + str(pkg.error_info), log_prefix))
-        else:
-            successfully_installed, log_dep = print_installation_log_recursive(
+        if len(pkg.dependencies) > 0:
+            success, log_dep = print_installation_log_recursive(
                 [dep for dep in pkg.dependencies],
                 pkg_dict,
                 intermediate_prefix)
-            if successfully_installed:
-                if pkg.installation_status == 1:
-                    log.append(
-                        log_prefix + format_log(pkg, "Successfull installation"))
-                elif pkg.installation_status == 2:
-                    log.append(log_prefix + format_log(pkg, "Failed"))
-                    successfully_installed = False
-                elif pkg.installation_status == 3:
-                    log.append(log_prefix + format_log(
-                        pkg, "Dependency Failed"))
-                    successfully_installed = False
-            else:
-                log.append(
-                    log_prefix + format_log(pkg, "Dependency Failed"))
-            log = log + log_dep
+        if not success:
+            log.append(log_prefix + format_log(
+                pkg, "Dependency Failed: " + str(pkg.error_info), intermediate_prefix))
+        elif pkg.error_info:
+            success = False
+            log.append(log_prefix + format_log(
+                pkg, "Failed: " + str(pkg.error_info), intermediate_prefix))
+        else:
+            if pkg.installation_status == 1:
+                log.append(log_prefix + format_log(
+                    pkg, "Skipped"))
+            elif pkg.installation_status == 3:
+                log.append(log_prefix + format_log(
+                    pkg, "Successfully installed"))
+            elif pkg.installation_status == 4:
+                log.append(log_prefix + format_log(
+                    pkg, "Successfully reinstalled"))
 
-    return successfully_installed, log
+        log = log + log_dep
+
+    return success, log
 
 
 def print_installation_log(pkg_name, pkg_dict):
@@ -516,30 +590,8 @@ def print_installation_log(pkg_name, pkg_dict):
         pkg_dict (dict): Store for package information
 
     """
-    log = []
-    successfully_installed = True
-    pkg = pkg_dict[pkg_name]
-    if pkg.error_info:
-        log.append(format_log(pkg, "Failed: " + str(pkg.error_info)))
-        successfully_installed = False
-    else:
-        successfully_installed, log_dep = print_installation_log_recursive(
-            [dep for dep in pkg.dependencies],
-            pkg_dict,
-            '')
-        if successfully_installed or pkg.installation_status == 3:
-            if pkg.installation_status == 1:
-                log.append(format_log(pkg, "Successfull installation"))
-            elif pkg.installation_status == 2:
-                log.append(format_log(pkg, "Failed"))
-                successfully_installed = False
-            elif pkg.installation_status == 3:
-                log.append(format_log(pkg, "Dependency Failed"))
-                successfully_installed = False
-        else:
-            log.append(format_log(pkg, "Dependency Failed"))
-        log = log + log_dep
-
+    successfully_installed, log = print_installation_log_recursive(
+        [pkg_name], pkg_dict, '', True)
     for line in log:
         if successfully_installed:
             printSuccessfull(line)
@@ -570,6 +622,9 @@ def main(argv):
                         help="Install packages only from local cache")
     parser.add_argument('-c', '--cachedir', dest='cache_dir', default='/var/cache/pacman/pkg',
                         help="Path of Pacman's package dir")
+    parser.add_argument('-f', '--force', action='store_true',
+                        dest='force', default=False,
+                        help="Force installation of the package")
     parser.add_argument('package_names', nargs='+',
                         help="Name of the packages to be installed")
     args = parser.parse_args(argv)
@@ -578,11 +633,10 @@ def main(argv):
         printError("This script needs to be run as root!")
         exit(1)
 
-    global pacman_cache_dir, packages_in_offical_repositories
+    global pacman_cache_dir, packages_in_offical_repositories, cached_packages
     packages_in_offical_repositories = pacman.get_available()
 
     pacman_cache_dir = args.cache_dir
-
     # generate list of packages in cache
     cached_packages = []
     for f in os.listdir(pacman_cache_dir):
@@ -594,11 +648,11 @@ def main(argv):
 
     # collect information about the package and their dependencies
     for pkg_name in args.package_names:
-        get_package_recursive(pkg_name, pkg_dict, cached_packages)
+        get_package_recursive(pkg_name, pkg_dict)
 
     # install the package and their dependencies
     for pkg_name in args.package_names:
-        install_package_recursive(pkg_name, pkg_dict, args.use_cache_only)
+        install_package_recursive(pkg_name, pkg_dict, args.use_cache_only, args.force)
 
     # print installation statistics
     printInfo("\nInstallation Statistics:")
