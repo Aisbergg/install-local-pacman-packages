@@ -117,8 +117,8 @@ class PackageBase:
     #   4: successfully reinstalled
     installation_status = 0
 
-    def __init__(self):
-        pass
+    def __init__(self, name=None):
+        self.name = name
 
     def install(self, force):
         """Install the Pacman package.
